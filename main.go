@@ -13,6 +13,7 @@ import (
 	landlockCmd "github.com/safedep/pmg/cmd/landlock"
 	"github.com/safedep/pmg/cmd/npm"
 	"github.com/safedep/pmg/cmd/pypi"
+	sandboxCmd "github.com/safedep/pmg/cmd/sandbox"
 	"github.com/safedep/pmg/cmd/setup"
 	"github.com/safedep/pmg/cmd/version"
 	"github.com/safedep/pmg/config"
@@ -31,6 +32,12 @@ var (
 	logFile string
 )
 
+func setLogEnv(key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		log.Warnf("failed to set %s: %v", key, err)
+	}
+}
+
 func main() {
 	cmd := &cobra.Command{
 		Use:              "pmg",
@@ -39,18 +46,18 @@ func main() {
 			// Always set this first because we will override the log
 			// level if debug or verbose is set
 			if logFile != "" {
-				os.Setenv("APP_LOG_FILE", logFile)
-				os.Setenv("APP_LOG_LEVEL", "info")
+				setLogEnv("APP_LOG_FILE", logFile)
+				setLogEnv("APP_LOG_LEVEL", "info")
 			}
 
 			// Set the log level when debug is enabled
 			if debug {
-				os.Setenv("APP_LOG_LEVEL", "debug")
+				setLogEnv("APP_LOG_LEVEL", "debug")
 			}
 
 			// Skip stdout logging when debugging is not enabled
 			if !debug {
-				os.Setenv("APP_LOG_SKIP_STDOUT_LOGGER", "true")
+				setLogEnv("APP_LOG_SKIP_STDOUT_LOGGER", "true")
 			}
 
 			// Apply config-based verbosity first
@@ -136,6 +143,7 @@ func main() {
 	cmd.AddCommand(version.NewVersionCommand())
 	cmd.AddCommand(setup.NewSetupCommand())
 	cmd.AddCommand(setup.NewRemoveCommand())
+	cmd.AddCommand(sandboxCmd.NewCommand())
 	cmd.AddCommand(cloud.NewCloudCommand())
 	cmd.AddCommand(configCmd.NewConfigCommand())
 
@@ -153,7 +161,11 @@ func main() {
 	})
 
 	defer analytics.Close()
-	defer eventlog.Close()
+	defer func() {
+		if err := eventlog.Close(); err != nil {
+			log.Warnf("failed to close eventlog: %v", err)
+		}
+	}()
 	defer func() {
 		if err := audit.Close(); err != nil {
 			log.Warnf("failed to close audit system: %v", err)
@@ -164,6 +176,10 @@ func main() {
 	analytics.TrackCI()
 
 	if err := cmd.Execute(); err != nil {
+		type exitCoder interface{ ExitCode() int }
+		if ec, ok := err.(exitCoder); ok {
+			os.Exit(ec.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
