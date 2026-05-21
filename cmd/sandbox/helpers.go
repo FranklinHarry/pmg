@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"regexp"
 	"strings"
 
@@ -60,6 +61,56 @@ func notFoundError(message, help string) error {
 		WithHumanError(message).
 		WithHelp(help).
 		Wrap(errors.New(message))
+}
+
+// Idempotent: returns err unchanged when nil or already useful, so call
+// sites can apply it without losing more precise pre-classified errors.
+func wrapUseful(err error, code, help string) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := usefulerror.AsUsefulError(err); ok {
+		return err
+	}
+	return usefulerror.Useful().
+		WithCode(code).
+		WithHumanError(err.Error()).
+		WithHelp(help).
+		Wrap(err)
+}
+
+func profileLoadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := usefulerror.AsUsefulError(err); ok {
+		return err
+	}
+	switch {
+	case errors.Is(err, pmgsandbox.ErrProfileNotFound):
+		return wrapUseful(err, usefulerror.ErrCodeNotFound,
+			"Use `pmg sandbox profile list` to see available profiles, or pass an existing profile YAML path.")
+	case errors.Is(err, pmgsandbox.ErrProfileInvalid):
+		return wrapUseful(err, usefulerror.ErrCodeInvalidArgument,
+			"Check the profile YAML for syntax/schema issues and verify any 'inherits:' parent name.")
+	}
+	return wrapUseful(err, usefulerror.ErrCodeUnknown,
+		"Failed to load the sandbox profile. Run with --verbose for the underlying cause.")
+}
+
+func registryInitError(err error) error {
+	return wrapUseful(err, ioErrorCode(err, usefulerror.ErrCodeUnknown),
+		"Failed to initialise the sandbox profile registry. Run with --verbose for details.")
+}
+
+func ioErrorCode(err error, fallback string) string {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return usefulerror.ErrCodePermissionDenied
+	case errors.Is(err, fs.ErrNotExist):
+		return usefulerror.ErrCodeNotFound
+	}
+	return fallback
 }
 
 func writeJSONIndent(out io.Writer, v any) error {
